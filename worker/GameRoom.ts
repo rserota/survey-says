@@ -418,7 +418,6 @@ export class GameRoom implements DurableObject {
   private async getAIHostMessage(context: string): Promise<string> {
     const startedAt = performance.now();
     const contextPreview = context.length > 500 ? `${context.slice(0, 500)}…` : context;
-    console.log(`[GameRoom ${this.gameState.roomCode || "unknown"}] ai.context ${contextPreview}`);
     try {
       const response = await this.env.AI.run("@cf/meta/llama-3.1-8b-instruct", {
         messages: [
@@ -435,6 +434,7 @@ export class GameRoom implements DurableObject {
       });
       const result = response as { response?: string };
       this.logTiming("ai.run.success", this.requestSequence, startedAt);
+      console.log(`[GameRoom ${this.gameState.roomCode || "unknown"}] ai.context ${contextPreview}, response ${result.response ?? "no response"}`);
       return result.response ?? context;
     } catch {
       // Fall back to plain context if AI is unavailable
