@@ -209,6 +209,15 @@ input:focus { outline: none; border-color: #f5a623; }
   font-style: italic;
 }
 
+/* Matching loader message */
+.matching-loader {
+  font-size: 0.9rem;
+  color: #b8b8db;
+  font-style: italic;
+  text-align: center;
+  width: 100%;
+}
+
 @media (max-width: 700px) {
   .host-message {
     max-width: 640px;

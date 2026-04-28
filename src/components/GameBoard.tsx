@@ -178,7 +178,9 @@ export function GameBoard({ state, roomCode, send, session, error, onLeave }: Pr
               disabled={!canGuess}
               autoFocus
             />
-            <button disabled={!canGuess} onClick={submitGuess}>Submit</button>
+            <button disabled={!canGuess} onClick={submitGuess}>
+              {guessPending ? <span className="spinner"></span> : "Submit"}
+            </button>
             <button className="secondary" disabled={!canPass} onClick={() => send({ type: "pass" })}>Pass</button>
           </div>
         )}
