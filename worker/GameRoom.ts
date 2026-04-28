@@ -505,9 +505,23 @@ export class GameRoom implements DurableObject {
     }
   }
 
+  private extractQuestionFromContext(context: string): string | null {
+    const match = context.match(/(?:first question|Next question|can you answer):\s*"([^"]+)"/i);
+    return match?.[1]?.trim() || null;
+  }
+
+  private buildQuestionSafeFallback(context: string, question: string): string {
+    const starter = context.match(/\.\s*([^.!?]+?)\s+(?:goes first|starts this round)\.?$/i)?.[1]?.trim();
+    if (starter) {
+      return `Next up: "${question}" ${starter} starts.`;
+    }
+    return `Next up: "${question}"`;
+  }
+
   private async getAIHostMessage(context: string): Promise<string> {
     const startedAt = performance.now();
     const contextPreview = context.length > 500 ? `${context.slice(0, 500)}…` : context;
+    const expectedQuestion = this.extractQuestionFromContext(context);
     try {
       const response = await this.env.AI.run("@cf/meta/llama-3.1-8b-instruct", {
         messages: [
@@ -515,20 +529,30 @@ export class GameRoom implements DurableObject {
             role: "system",
             content:
               "You are the enthusiastic, witty host of a Family Feud-style game show called 'Survey Says'. " +
-              "Keep responses SHORT (1-2 sentences), energetic, and fun. Stay in character at all times.",
+              "Keep responses SHORT (1-2 sentences), energetic, and fun. Stay in character at all times. " +
+              "Never invent or alter facts, answers, or questions. If a question appears in context, use that exact question text.",
           },
           { role: "user", content: context },
         ],
-        temperature: 0.3,
+        temperature: 0.2,
         max_tokens: 100,
       });
       const result = response as { response?: string };
+      const aiText = result.response ?? context;
+      if (expectedQuestion && !aiText.includes(`"${expectedQuestion}"`) && !aiText.includes(expectedQuestion)) {
+        this.logTiming("ai.run.offtopic_question", this.requestSequence, startedAt);
+        console.log(`[GameRoom ${this.gameState.roomCode || "unknown"}] ai.offtopic expectedQuestion="${expectedQuestion}" response=${aiText}`);
+        return this.buildQuestionSafeFallback(context, expectedQuestion);
+      }
       this.logTiming("ai.run.success", this.requestSequence, startedAt);
       console.log(`[GameRoom ${this.gameState.roomCode || "unknown"}] ai.context ${contextPreview}, response ${result.response ?? "no response"}`);
-      return result.response ?? context;
+      return aiText;
     } catch {
       // Fall back to plain context if AI is unavailable
       this.logTiming("ai.run.fallback", this.requestSequence, startedAt);
+      if (expectedQuestion) {
+        return this.buildQuestionSafeFallback(context, expectedQuestion);
+      }
       return context;
     }
   }
