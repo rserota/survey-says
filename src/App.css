@@ -109,6 +109,9 @@ input:focus { outline: none; border-color: #f5a623; }
   border-radius: 8px;
   font-size: 1.1rem;
   font-style: italic;
+  width: 100%;
+  max-width: 820px;
+  align-self: center;
 }
 .host-icon { font-size: 1.5rem; }
 
@@ -174,6 +177,10 @@ input:focus { outline: none; border-color: #f5a623; }
 .gameover h2 { font-size: 2rem; color: #f5a623; margin-bottom: 0.5rem; }
 
 @media (max-width: 700px) {
+  .host-message {
+    max-width: 640px;
+  }
+
   .player-status,
   .game-header,
   .scoreboard,
@@ -187,6 +194,10 @@ input:focus { outline: none; border-color: #f5a623; }
 }
 
 @media (max-width: 480px) {
+  .host-message {
+    max-width: 100%;
+  }
+
   .answer-grid {
     grid-template-columns: 1fr;
   }

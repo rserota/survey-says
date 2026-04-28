@@ -445,10 +445,6 @@ export class GameRoom implements DurableObject {
 
   private async publishState(hostMessageContext?: string): Promise<void> {
     const startedAt = performance.now();
-    if (hostMessageContext !== undefined) {
-      this.gameState.hostMessage = hostMessageContext;
-    }
-
     await this.saveState();
     await this.broadcastState();
     this.logTiming("state.publish", this.requestSequence, startedAt, `phase=${this.gameState.phase} sockets=${this.state.getWebSockets().length}`);
