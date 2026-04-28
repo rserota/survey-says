@@ -1,7 +1,7 @@
 import type { GameState, Question, Team, ClientMessage, ServerMessage, PlayerSession, Player } from "../src/types";
 
-// ── Sample questions ──────────────────────────────────────────────────────────
-const SAMPLE_QUESTIONS: Question[] = [
+// ── Fallback questions (used only if AI generation fails) ───────────────────
+const FALLBACK_QUESTIONS: Question[] = [
   {
     prompt: "Name something people do first thing in the morning.",
     answers: [
@@ -33,6 +33,16 @@ const SAMPLE_QUESTIONS: Question[] = [
       { text: "Bad weather", points: 15, revealed: false },
     ],
   },
+  {
+    prompt: "Name something people bring to a picnic.",
+    answers: [
+      { text: "Food", points: 48, revealed: false },
+      { text: "Blanket", points: 35, revealed: false },
+      { text: "Drinks", points: 30, revealed: false },
+      { text: "Utensils", points: 20, revealed: false },
+      { text: "Sunscreen", points: 15, revealed: false },
+    ],
+  },
 ];
 
 type SessionAttachment = PlayerSession;
@@ -54,11 +64,9 @@ export class GameRoom implements DurableObject {
       phase: "lobby",
       teams: [],
       currentQuestionIndex: 0,
-      questions: SAMPLE_QUESTIONS.map((q) => ({
-        ...q,
-        answers: q.answers.map((a) => ({ ...a })),
-      })),
+      questions: [],
       activeTeamId: null,
+      lastRoundStarterTeamId: null,
       hostTeamId: null,
       hostMessage: "Welcome! Waiting for teams to join…",
     };
@@ -72,6 +80,7 @@ export class GameRoom implements DurableObject {
             ...team,
             players: team.players ?? [],
           })),
+          lastRoundStarterTeamId: savedState.lastRoundStarterTeamId ?? null,
           hostTeamId: savedState.hostTeamId ?? null,
         };
       }
@@ -259,9 +268,16 @@ export class GameRoom implements DurableObject {
       this.sendTo(ws, { type: "error", message: "Only the host team can start the game." });
       return;
     }
+    await this.ensureQuestionsInitialized();
+    if (this.gameState.questions.length < 1) {
+      this.sendTo(ws, { type: "error", message: "Could not prepare questions. Try again." });
+      return;
+    }
     if (this.gameState.teams.length < 1) return;
     this.gameState.phase = "guessing";
-    this.gameState.activeTeamId = this.pickRandomTeamId();
+    const firstRoundStarter = this.pickRandomTeamId();
+    this.gameState.activeTeamId = firstRoundStarter;
+    this.gameState.lastRoundStarterTeamId = firstRoundStarter;
     this.gameState.teams.forEach((team) => (team.strikes = 0));
     const startingTeam = this.activeTeam();
     await this.publishState(
@@ -365,7 +381,9 @@ export class GameRoom implements DurableObject {
     } else {
       this.gameState.currentQuestionIndex += 1;
       this.gameState.phase = "guessing";
-      this.gameState.activeTeamId = this.pickRandomTeamId();
+      const nextStarter = this.pickAlternatingTeamId(this.gameState.lastRoundStarterTeamId ?? null);
+      this.gameState.activeTeamId = nextStarter;
+      this.gameState.lastRoundStarterTeamId = nextStarter;
       // Reset strikes for new question
       this.gameState.teams.forEach((t) => (t.strikes = 0));
       const startingTeam = this.activeTeam();
@@ -398,6 +416,18 @@ export class GameRoom implements DurableObject {
     return this.gameState.teams[randomIndex]?.id ?? null;
   }
 
+  private pickAlternatingTeamId(previousStarterId: string | null): string | null {
+    const teams = this.gameState.teams;
+    if (teams.length === 0) return null;
+    if (teams.length === 1) return teams[0]?.id ?? null;
+    if (!previousStarterId) return teams[0]?.id ?? null;
+
+    const previousIndex = teams.findIndex((team) => team.id === previousStarterId);
+    if (previousIndex === -1) return teams[0]?.id ?? null;
+
+    return teams[(previousIndex + 1) % teams.length]?.id ?? null;
+  }
+
   private findTeamByName(teamName: string): Team | undefined {
     return this.gameState.teams.find((team) => team.name.toLowerCase() === teamName.toLowerCase());
   }
@@ -411,6 +441,114 @@ export class GameRoom implements DurableObject {
     }
 
     return null;
+  }
+
+  private normaliseQuestionText(value: string): string {
+    return value.trim().replace(/\s+/g, " ");
+  }
+
+  private toValidatedQuestions(rawQuestions: unknown, expectedCount: number): Question[] | null {
+    if (!Array.isArray(rawQuestions) || rawQuestions.length !== expectedCount) return null;
+
+    const seenPrompts = new Set<string>();
+    const parsed: Question[] = [];
+
+    for (const rawQuestion of rawQuestions) {
+      if (!rawQuestion || typeof rawQuestion !== "object") return null;
+      const prompt = this.normaliseQuestionText(String((rawQuestion as { prompt?: unknown }).prompt ?? ""));
+      const rawAnswers = (rawQuestion as { answers?: unknown }).answers;
+      if (!prompt || !Array.isArray(rawAnswers) || rawAnswers.length < 4) return null;
+
+      const promptKey = prompt.toLowerCase();
+      if (seenPrompts.has(promptKey)) return null;
+      seenPrompts.add(promptKey);
+
+      const answers = rawAnswers
+        .map((rawAnswer) => {
+          if (!rawAnswer || typeof rawAnswer !== "object") return null;
+          const text = this.normaliseQuestionText(String((rawAnswer as { text?: unknown }).text ?? ""));
+          const pointsValue = (rawAnswer as { points?: unknown }).points;
+          const points = typeof pointsValue === "number" ? Math.round(pointsValue) : Number(pointsValue);
+          if (!text || !Number.isFinite(points) || points <= 0) return null;
+          return { text, points, revealed: false };
+        })
+        .filter((answer): answer is { text: string; points: number; revealed: false } => answer !== null)
+        .sort((a, b) => b.points - a.points)
+        .slice(0, 8);
+
+      if (answers.length < 4) return null;
+      parsed.push({ prompt, answers });
+    }
+
+    return parsed;
+  }
+
+  private async generateQuestionsFromAI(count: number): Promise<Question[] | null> {
+    const startedAt = performance.now();
+    try {
+      const response = await this.env.AI.run("@cf/meta/llama-3.1-8b-instruct", {
+        messages: [
+          {
+            role: "system",
+            content:
+              "Generate Family Feud style game content as strict JSON only. " +
+              "Output exactly one JSON object with shape {\"questions\":[...]}. " +
+              "Each question must have: prompt (string), answers (array of 4-6 items). " +
+              "Each answer must have: text (string), points (integer). " +
+              "Keep prompts clean and family-friendly. Do not include markdown or extra commentary.",
+          },
+          {
+            role: "user",
+            content:
+              `Create exactly ${count} unique questions for one game round set. ` +
+              "Points should be plausible survey-style values in descending popularity range.",
+          },
+        ],
+        temperature: 0.4,
+        max_tokens: 900,
+      });
+
+      const raw = (response as { response?: string }).response ?? "";
+      const jsonStart = raw.indexOf("{");
+      const jsonEnd = raw.lastIndexOf("}");
+      if (jsonStart === -1 || jsonEnd === -1 || jsonEnd <= jsonStart) {
+        this.logTiming("ai.questions.unparseable", this.requestSequence, startedAt);
+        return null;
+      }
+
+      const parsed = JSON.parse(raw.slice(jsonStart, jsonEnd + 1)) as { questions?: unknown };
+      const validatedQuestions = this.toValidatedQuestions(parsed.questions, count);
+      if (!validatedQuestions) {
+        this.logTiming("ai.questions.invalid", this.requestSequence, startedAt);
+        return null;
+      }
+
+      this.logTiming("ai.questions.generated", this.requestSequence, startedAt, `count=${validatedQuestions.length}`);
+      return validatedQuestions;
+    } catch {
+      this.logTiming("ai.questions.error", this.requestSequence, startedAt);
+      return null;
+    }
+  }
+
+  private async ensureQuestionsInitialized(): Promise<void> {
+    if (this.gameState.questions.length >= 4) return;
+
+    const generated = await this.generateQuestionsFromAI(4);
+    if (generated) {
+      this.gameState.questions = generated;
+      this.gameState.currentQuestionIndex = 0;
+      await this.saveState();
+      return;
+    }
+
+    // Fallback so the game can still start if generation fails.
+    this.gameState.questions = FALLBACK_QUESTIONS.map((question) => ({
+      prompt: question.prompt,
+      answers: question.answers.map((answer) => ({ ...answer, revealed: false })),
+    }));
+    this.gameState.currentQuestionIndex = 0;
+    await this.saveState();
   }
 
   private normaliseForMatching(value: string): string {

@@ -38,6 +38,7 @@ export interface GameState {
   currentQuestionIndex: number;
   questions: Question[];
   activeTeamId: string | null;
+  lastRoundStarterTeamId?: string | null;
   hostTeamId: string | null;
   hostMessage: string;
 }
