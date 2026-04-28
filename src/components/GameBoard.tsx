@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import type { GameState, PlayerSession } from "../types";
 
 interface Props {
@@ -13,6 +13,9 @@ interface Props {
 export function GameBoard({ state, roomCode, send, session, error, onLeave }: Props) {
   const [guess, setGuess] = useState("");
   const [copied, setCopied] = useState(false);
+  const [loadingStart, setLoadingStart] = useState(false);
+  const [waitingForHost, setWaitingForHost] = useState(false);
+  const [ellipsisDots, setEllipsisDots] = useState("");
   const question = state.questions[state.currentQuestionIndex];
   const isHost = session?.isHost ?? false;
   const isActiveTeam = !!session && state.activeTeamId === session.teamId;
@@ -36,6 +39,33 @@ export function GameBoard({ state, roomCode, send, session, error, onLeave }: Pr
       // ignore clipboard errors
     }
   }
+
+  function handleStartGame() {
+    setLoadingStart(true);
+    send({ type: "start_game" });
+  }
+
+  // Detect when AI is generating host message
+  useEffect(() => {
+    const isGenerating = state.phase !== "lobby" && state.hostMessage === "Loading host message...";
+    setWaitingForHost(isGenerating);
+  }, [state.hostMessage, state.phase]);
+
+  // Animate ellipsis while waiting for host
+  useEffect(() => {
+    if (!waitingForHost) return;
+    const interval = setInterval(() => {
+      setEllipsisDots((prev) => (prev.length >= 3 ? "" : prev + "."));
+    }, 400);
+    return () => clearInterval(interval);
+  }, [waitingForHost]);
+
+  // Clear loading state when game starts
+  useEffect(() => {
+    if (state.phase !== "lobby") {
+      setLoadingStart(false);
+    }
+  }, [state.phase]);
 
   return (
     <div className="game-board">
@@ -72,7 +102,9 @@ export function GameBoard({ state, roomCode, send, session, error, onLeave }: Pr
       {/* Host message */}
       <div className="host-message">
         <span className="host-icon">🎤</span>
-        <p>{state.hostMessage}</p>
+        <p className={waitingForHost ? "loading-text" : ""}>
+          {waitingForHost ? ellipsisDots || "..." : state.hostMessage}
+        </p>
       </div>
 
       {/* Scoreboard */}
@@ -111,8 +143,16 @@ export function GameBoard({ state, roomCode, send, session, error, onLeave }: Pr
       {/* Controls */}
       <div className="controls">
         {state.phase === "lobby" && (
-          <button disabled={!canStart} onClick={() => send({ type: "start_game" })}>
-            {isHost ? "Start Game" : "Waiting for host to start"}
+          <button disabled={!canStart || loadingStart} onClick={handleStartGame}>
+            {loadingStart ? (
+              <>
+                <span className="spinner"></span> Loading questions...
+              </>
+            ) : isHost ? (
+              "Start Game"
+            ) : (
+              "Waiting for host to start"
+            )}
           </button>
         )}
 

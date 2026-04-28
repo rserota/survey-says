@@ -710,6 +710,12 @@ export class GameRoom implements DurableObject {
 
   private async publishState(hostMessageContext?: string): Promise<void> {
     const startedAt = performance.now();
+    
+    // If generating new host message, show loading state immediately
+    if (hostMessageContext !== undefined) {
+      this.gameState.hostMessage = "Loading host message...";
+    }
+    
     await this.saveState();
     await this.broadcastState();
     this.logTiming("state.publish", this.requestSequence, startedAt, `phase=${this.gameState.phase} sockets=${this.state.getWebSockets().length}`);
