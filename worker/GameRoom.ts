@@ -496,8 +496,47 @@ export class GameRoom implements DurableObject {
     return parsed;
   }
 
+  private hasOverusedPromptPatterns(questions: Question[]): boolean {
+    const overusedPatterns = [
+      /woman'?s\s+(purse|bag|handbag)/i,
+      /find\s+in\s+a\s+woman'?s\s+(purse|bag|handbag)/i,
+      /\b(purse|handbag)\b/i,
+      /\b(pet|pets|dog|dogs|cat|cats)\b/i,
+    ];
+
+    return questions.some((question) =>
+      overusedPatterns.some((pattern) => pattern.test(question.prompt))
+    );
+  }
+
   private async generateQuestionsFromAI(count: number): Promise<Question[] | null> {
     const startedAt = performance.now();
+    const themePool = [
+      "workplace",
+      "school",
+      "travel",
+      "holidays",
+      "weather",
+      "sports",
+      "music",
+      "technology",
+      "food",
+      "shopping",
+      "family",
+      "home chores",
+      "transportation",
+      "health",
+      "weekends",
+      "movies",
+      "social media",
+      "parties",
+      "cooking",
+      "exercise",
+    ];
+    const shuffledThemes = [...themePool].sort(() => Math.random() - 0.5);
+    const selectedThemes = shuffledThemes.slice(0, 6);
+    const variationSeed = crypto.randomUUID().slice(0, 8);
+
     try {
       const response = await this.env.AI.run("@cf/meta/llama-3.1-8b-instruct", {
         messages: [
@@ -508,16 +547,20 @@ export class GameRoom implements DurableObject {
               "Output exactly one JSON object with shape {\"questions\":[...]}. " +
               "Each question must have: prompt (string), answers (array of 4-6 items). " +
               "Each answer must have: text (string), points (integer). " +
-              "Keep prompts clean and family-friendly. Do not include markdown or extra commentary.",
+              "Keep prompts clean and family-friendly. Do not include markdown or extra commentary. " +
+              "Avoid overused prompts about women's purses/handbags and pets/dogs/cats.",
           },
           {
             role: "user",
             content:
               `Create exactly ${count} unique questions for one game round set. ` +
-              "Points should be plausible survey-style values in descending popularity range.",
+              "Points should be plausible survey-style values in descending popularity range. " +
+              `Use this variation seed: ${variationSeed}. ` +
+              `Use these themes for variety: ${selectedThemes.join(", ")}. ` +
+              "Do not repeat common trope prompts. Make each question about a clearly different situation.",
           },
         ],
-        temperature: 0.4,
+        temperature: 0.85,
         max_tokens: 900,
       });
 
@@ -533,6 +576,11 @@ export class GameRoom implements DurableObject {
       const validatedQuestions = this.toValidatedQuestions(parsed.questions, count);
       if (!validatedQuestions) {
         this.logTiming("ai.questions.invalid", this.requestSequence, startedAt);
+        return null;
+      }
+
+      if (this.hasOverusedPromptPatterns(validatedQuestions)) {
+        this.logTiming("ai.questions.overused", this.requestSequence, startedAt);
         return null;
       }
 
@@ -572,6 +620,12 @@ export class GameRoom implements DurableObject {
       .trim();
   }
 
+  private tokenizeForMatching(value: string): string[] {
+    return this.normaliseForMatching(value)
+      .split(" ")
+      .filter(Boolean);
+  }
+
   private async findMatchingAnswerIndex(question: Question, guess: string): Promise<number | null> {
     const normalisedGuess = this.normaliseForMatching(guess);
     if (!normalisedGuess) return null;
@@ -599,9 +653,11 @@ export class GameRoom implements DurableObject {
             role: "system",
             content:
               "You decide if a Family Feud player guess semantically matches ONE unrevealed board answer. " +
-              "Be strict to avoid false positives. Match synonyms/paraphrases (e.g. 'bathe' == 'shower') only when clearly equivalent in this question context. " +
+              "Be VERY strict to avoid false positives. Match synonyms/paraphrases (e.g. 'bathe' == 'shower') only when clearly equivalent in this question context. " +
+              "Do NOT match items that are merely in the same category (example: fish != lizard, dog != cat, apple != orange). " +
+              "For single-word guess vs single-word answer, only match if they are near-synonyms or lexical variants of the same concept. " +
               "If uncertain or multiple choices are plausible, return no match. " +
-              "Respond with ONLY valid JSON: {\"matchIndex\": number|null, \"confidence\": number, \"reason\": string}.",
+              "Respond with ONLY valid JSON: {\"matchIndex\": number|null, \"confidence\": number, \"equivalent\": boolean, \"isCategoryOnly\": boolean, \"reason\": string}.",
           },
           {
             role: "user",
@@ -609,7 +665,7 @@ export class GameRoom implements DurableObject {
               `Question: ${question.prompt}\n` +
               `Guess: ${guess.trim()}\n` +
               `Unrevealed answers: ${JSON.stringify(unrevealedCandidates)}\n` +
-              "Pick exactly one index from the unrevealed list or null.",
+              "Pick exactly one index from the unrevealed list or null. Set equivalent=true only when the guess and chosen answer are truly equivalent in meaning for this question. Set isCategoryOnly=true when they are related but not equivalent.",
           },
         ],
         temperature: 0.1,
@@ -627,6 +683,8 @@ export class GameRoom implements DurableObject {
       const parsed = JSON.parse(raw.slice(jsonStart, jsonEnd + 1)) as {
         matchIndex?: number | null;
         confidence?: number;
+        equivalent?: boolean;
+        isCategoryOnly?: boolean;
         reason?: string;
       };
 
@@ -642,9 +700,36 @@ export class GameRoom implements DurableObject {
       }
 
       const confidence = typeof parsed.confidence === "number" ? parsed.confidence : 0;
-      if (confidence < 0.72) {
+      if (confidence < 0.78) {
         this.logTiming("ai.match.low_confidence", this.requestSequence, startedAt, `confidence=${confidence.toFixed(2)}`);
         return null;
+      }
+
+      // Guardrail for single-word matches: require explicit equivalence decision from AI.
+      const guessTokens = this.tokenizeForMatching(guess);
+      const answerTokens = this.tokenizeForMatching(matchedCandidate.text);
+      const guessNorm = guessTokens.join(" ");
+      const answerNorm = answerTokens.join(" ");
+
+      const guessIsSingle = guessTokens.length === 1;
+      const answerIsSingle = answerTokens.length === 1;
+
+      if (
+        guessIsSingle &&
+        answerIsSingle &&
+        guessNorm !== answerNorm
+      ) {
+        const equivalent = parsed.equivalent === true;
+        const categoryOnly = parsed.isCategoryOnly === true;
+        if (!equivalent || categoryOnly || confidence < 0.9) {
+          this.logTiming(
+            "ai.match.rejected.single_word_mismatch",
+            this.requestSequence,
+            startedAt,
+            `guess=${guessNorm} answer=${answerNorm} equivalent=${equivalent} categoryOnly=${categoryOnly} confidence=${confidence.toFixed(2)}`
+          );
+          return null;
+        }
       }
 
       const reason = (parsed.reason ?? "").slice(0, 80);

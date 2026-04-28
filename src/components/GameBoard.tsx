@@ -14,18 +14,20 @@ export function GameBoard({ state, roomCode, send, session, error, onLeave }: Pr
   const [guess, setGuess] = useState("");
   const [copied, setCopied] = useState(false);
   const [loadingStart, setLoadingStart] = useState(false);
+  const [guessPending, setGuessPending] = useState(false);
   const [waitingForHost, setWaitingForHost] = useState(false);
   const [ellipsisDots, setEllipsisDots] = useState("");
   const question = state.questions[state.currentQuestionIndex];
   const isHost = session?.isHost ?? false;
   const isActiveTeam = !!session && state.activeTeamId === session.teamId;
   const canStart = state.phase === "lobby" && isHost;
-  const canGuess = state.phase === "guessing" && isActiveTeam;
+  const canGuess = state.phase === "guessing" && isActiveTeam && !guessPending;
   const canPass = canGuess;
   const canAdvance = state.phase === "reveal" && isHost;
 
   function submitGuess() {
     if (!guess.trim() || !canGuess) return;
+    setGuessPending(true);
     send({ type: "guess", answer: guess.trim() });
     setGuess("");
   }
@@ -66,6 +68,16 @@ export function GameBoard({ state, roomCode, send, session, error, onLeave }: Pr
       setLoadingStart(false);
     }
   }, [state.phase]);
+
+  useEffect(() => {
+    setGuessPending(false);
+  }, [state]);
+
+  useEffect(() => {
+    if (error) {
+      setGuessPending(false);
+    }
+  }, [error]);
 
   return (
     <div className="game-board">
