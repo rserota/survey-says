@@ -280,10 +280,8 @@ export class GameRoom implements DurableObject {
       return;
     }
     const question = this.currentQuestion();
-    const normalised = answer.toLowerCase().trim();
-    const match = question.answers.find(
-      (a) => !a.revealed && a.text.toLowerCase().includes(normalised)
-    );
+    const matchIndex = await this.findMatchingAnswerIndex(question, answer);
+    const match = matchIndex !== null ? question.answers[matchIndex] : undefined;
 
     if (match) {
       match.revealed = true;
@@ -413,6 +411,98 @@ export class GameRoom implements DurableObject {
     }
 
     return null;
+  }
+
+  private normaliseForMatching(value: string): string {
+    return value
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  private async findMatchingAnswerIndex(question: Question, guess: string): Promise<number | null> {
+    const normalisedGuess = this.normaliseForMatching(guess);
+    if (!normalisedGuess) return null;
+
+    // Fast exact-text path for obvious matches.
+    for (let i = 0; i < question.answers.length; i++) {
+      const candidate = question.answers[i];
+      if (!candidate || candidate.revealed) continue;
+      if (this.normaliseForMatching(candidate.text) === normalisedGuess) {
+        return i;
+      }
+    }
+
+    const startedAt = performance.now();
+    const unrevealedCandidates = question.answers
+      .map((candidate, index) => ({ index, text: candidate.text, revealed: candidate.revealed }))
+      .filter((candidate) => !candidate.revealed);
+
+    if (unrevealedCandidates.length === 0) return null;
+
+    try {
+      const response = await this.env.AI.run("@cf/meta/llama-3.1-8b-instruct", {
+        messages: [
+          {
+            role: "system",
+            content:
+              "You decide if a Family Feud player guess semantically matches ONE unrevealed board answer. " +
+              "Be strict to avoid false positives. Match synonyms/paraphrases (e.g. 'bathe' == 'shower') only when clearly equivalent in this question context. " +
+              "If uncertain or multiple choices are plausible, return no match. " +
+              "Respond with ONLY valid JSON: {\"matchIndex\": number|null, \"confidence\": number, \"reason\": string}.",
+          },
+          {
+            role: "user",
+            content:
+              `Question: ${question.prompt}\n` +
+              `Guess: ${guess.trim()}\n` +
+              `Unrevealed answers: ${JSON.stringify(unrevealedCandidates)}\n` +
+              "Pick exactly one index from the unrevealed list or null.",
+          },
+        ],
+        temperature: 0.1,
+        max_tokens: 120,
+      });
+
+      const raw = (response as { response?: string }).response ?? "";
+      const jsonStart = raw.indexOf("{");
+      const jsonEnd = raw.lastIndexOf("}");
+      if (jsonStart === -1 || jsonEnd === -1 || jsonEnd <= jsonStart) {
+        this.logTiming("ai.match.unparseable", this.requestSequence, startedAt);
+        return null;
+      }
+
+      const parsed = JSON.parse(raw.slice(jsonStart, jsonEnd + 1)) as {
+        matchIndex?: number | null;
+        confidence?: number;
+        reason?: string;
+      };
+
+      if (parsed.matchIndex === null || parsed.matchIndex === undefined) {
+        this.logTiming("ai.match.none", this.requestSequence, startedAt, `confidence=${(parsed.confidence ?? 0).toFixed(2)}`);
+        return null;
+      }
+
+      const matchedCandidate = unrevealedCandidates.find((candidate) => candidate.index === parsed.matchIndex);
+      if (!matchedCandidate) {
+        this.logTiming("ai.match.invalid_index", this.requestSequence, startedAt);
+        return null;
+      }
+
+      const confidence = typeof parsed.confidence === "number" ? parsed.confidence : 0;
+      if (confidence < 0.72) {
+        this.logTiming("ai.match.low_confidence", this.requestSequence, startedAt, `confidence=${confidence.toFixed(2)}`);
+        return null;
+      }
+
+      const reason = (parsed.reason ?? "").slice(0, 80);
+      this.logTiming("ai.match.accepted", this.requestSequence, startedAt, `index=${matchedCandidate.index} confidence=${confidence.toFixed(2)} reason=${reason}`);
+      return matchedCandidate.index;
+    } catch {
+      this.logTiming("ai.match.error", this.requestSequence, startedAt);
+      return null;
+    }
   }
 
   private async getAIHostMessage(context: string): Promise<string> {
