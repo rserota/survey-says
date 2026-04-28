@@ -39,6 +39,7 @@ export interface GameState {
   questions: Question[];
   activeTeamId: string | null;
   lastRoundStarterTeamId?: string | null;
+  roundControlPassed?: boolean;
   hostTeamId: string | null;
   hostMessage: string;
 }

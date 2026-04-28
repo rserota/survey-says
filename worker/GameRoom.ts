@@ -67,6 +67,7 @@ export class GameRoom implements DurableObject {
       questions: [],
       activeTeamId: null,
       lastRoundStarterTeamId: null,
+      roundControlPassed: false,
       hostTeamId: null,
       hostMessage: "Welcome! Waiting for teams to join…",
     };
@@ -81,6 +82,7 @@ export class GameRoom implements DurableObject {
             players: team.players ?? [],
           })),
           lastRoundStarterTeamId: savedState.lastRoundStarterTeamId ?? null,
+          roundControlPassed: savedState.roundControlPassed ?? false,
           hostTeamId: savedState.hostTeamId ?? null,
         };
       }
@@ -279,6 +281,7 @@ export class GameRoom implements DurableObject {
     this.gameState.activeTeamId = firstRoundStarter;
     this.gameState.lastRoundStarterTeamId = firstRoundStarter;
     this.gameState.teams.forEach((team) => (team.strikes = 0));
+    this.gameState.roundControlPassed = false;
     const startingTeam = this.activeTeam();
     await this.publishState(
       `The game is starting! Here's the first question: "${this.currentQuestion().prompt}". ${startingTeam?.name ?? "A team"} goes first.`
@@ -321,17 +324,26 @@ export class GameRoom implements DurableObject {
       if (activeTeam) {
         activeTeam.strikes += 1;
         if (activeTeam.strikes >= 3) {
-          // Team got 3 strikes - pass control to other team
-          this.switchActiveTeam();
-          const newActiveTeam = this.activeTeam();
-          if (newActiveTeam) {
-            // Reset the new team's strikes to 0 for their attempt
-            newActiveTeam.strikes = 0;
+          if (this.gameState.roundControlPassed) {
+            // Both teams struck out — reveal remaining answers and end the round
+            question.answers.forEach((a) => (a.revealed = true));
+            this.gameState.phase = "reveal";
+            await this.publishState(
+              `Three strikes from ${activeTeam.name} too! No one got it — let's reveal the remaining answers!`
+            );
+          } else {
+            // First strike-out — pass control to other team
+            this.switchActiveTeam();
+            const newActiveTeam = this.activeTeam();
+            if (newActiveTeam) {
+              newActiveTeam.strikes = 0;
+            }
+            this.gameState.roundControlPassed = true;
+            this.gameState.phase = "guessing";
+            await this.publishState(
+              `Three strikes! "${answer}" was not on the board. Control passes to ${newActiveTeam?.name || "the other team"}!`
+            );
           }
-          this.gameState.phase = "guessing";
-          await this.publishState(
-            `Three strikes! "${answer}" was not on the board. Control passes to ${newActiveTeam?.name || "the other team"}!`
-          );
         } else {
           await this.publishState(
             `"${answer}" is not on the board! That's strike ${activeTeam.strikes}!`
@@ -384,8 +396,9 @@ export class GameRoom implements DurableObject {
       const nextStarter = this.pickAlternatingTeamId(this.gameState.lastRoundStarterTeamId ?? null);
       this.gameState.activeTeamId = nextStarter;
       this.gameState.lastRoundStarterTeamId = nextStarter;
-      // Reset strikes for new question
+      // Reset strikes and control-pass flag for new question
       this.gameState.teams.forEach((t) => (t.strikes = 0));
+      this.gameState.roundControlPassed = false;
       const startingTeam = this.activeTeam();
       await this.publishState(
         `Next question: "${this.currentQuestion().prompt}". ${startingTeam?.name ?? "A team"} starts this round.`
