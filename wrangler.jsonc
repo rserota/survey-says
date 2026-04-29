@@ -5,6 +5,12 @@
 {
 	"$schema": "node_modules/wrangler/config-schema.json",
 	"name": "survey-says",
+	"routes": [
+		{
+			"pattern": "survey-says.frivolous.biz",
+			"custom_domain": true
+		}
+	],
 	"main": "worker/index.ts",
 	"compatibility_date": "2026-04-21",
 	"assets": {

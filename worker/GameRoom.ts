@@ -656,6 +656,9 @@ export class GameRoom implements DurableObject {
               "Be VERY strict to avoid false positives. Match synonyms/paraphrases (e.g. 'bathe' == 'shower') only when clearly equivalent in this question context. " +
               "Do NOT match items that are merely in the same category (example: fish != lizard, dog != cat, apple != orange). " +
               "For single-word guess vs single-word answer, only match if they are near-synonyms or lexical variants of the same concept. " +
+                            "Be EXTREMELY strict. Only match if the guess is a direct synonym or clear paraphrase of the answer. " +
+                            "REJECT if they are merely related or in the same category (example: meat != cheese, fish != lizard, dog != cat). " +
+                            "REJECT if uncertain. For any doubt, return null. " +
               "If uncertain or multiple choices are plausible, return no match. " +
               "Respond with ONLY valid JSON: {\"matchIndex\": number|null, \"confidence\": number, \"equivalent\": boolean, \"isCategoryOnly\": boolean, \"reason\": string}.",
           },
@@ -700,7 +703,7 @@ export class GameRoom implements DurableObject {
       }
 
       const confidence = typeof parsed.confidence === "number" ? parsed.confidence : 0;
-      if (confidence < 0.78) {
+      if (confidence < 0.85) {
         this.logTiming("ai.match.low_confidence", this.requestSequence, startedAt, `confidence=${confidence.toFixed(2)}`);
         return null;
       }
