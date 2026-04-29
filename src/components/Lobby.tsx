@@ -84,7 +84,7 @@ export function Lobby({ onCreate, onJoin, error }: Props) {
   return (
     <div className="lobby">
       <h1>Survey Says! 🎉</h1>
-      <p className="subtitle">A Family Feud-style multiplayer game</p>
+      <p className="subtitle">Guess what the crowd said</p>
       {error && <p className="error-banner">{error}</p>}
       <button onClick={() => setView("create")}>Create Room</button>
       <button className="secondary" onClick={() => setView("join")}>Join Room</button>
