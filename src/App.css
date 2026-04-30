@@ -201,6 +201,37 @@ input:focus { outline: none; border-color: #f5a623; }
 .pre-game-settings input {
   width: 100%;
 }
+.pre-game-settings select {
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  padding: 0.75rem 2.2rem 0.75rem 0.9rem;
+  border-radius: 8px;
+  border: 2px solid #2a2a5e;
+  background-color: #111140;
+  color: #fff;
+  font-size: 1rem;
+  font-weight: 600;
+  background-image:
+    linear-gradient(45deg, transparent 50%, #f5a623 50%),
+    linear-gradient(135deg, #f5a623 50%, transparent 50%);
+  background-position:
+    calc(100% - 16px) calc(50% - 3px),
+    calc(100% - 10px) calc(50% - 3px);
+  background-size: 6px 6px, 6px 6px;
+  background-repeat: no-repeat;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.pre-game-settings select:hover {
+  border-color: #3b3b82;
+}
+
+.pre-game-settings select:focus {
+  outline: none;
+  border-color: #f5a623;
+  box-shadow: 0 0 0 3px rgba(245, 166, 35, 0.2);
+}
 .buzz-btn { font-size: 1.5rem; padding: 1rem 3rem; background: #e74c3c; color: #fff; border-radius: 50px; }
 .buzz-btn:hover { background: #c0392b; }
 .guess-area { display: flex; gap: 0.75rem; width: 100%; max-width: 500px; }

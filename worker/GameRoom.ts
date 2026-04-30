@@ -344,13 +344,18 @@ export class GameRoom implements DurableObject {
         if (activeTeam.strikes >= 3) {
           if (this.gameState.roundControlPassed) {
             // Both teams struck out — reveal remaining answers and end the round
+            const remainingAnswers = question.answers
+              .filter((a) => !a.revealed)
+              .map((a) => a.text);
             question.answers.forEach((a) => (a.revealed = true));
             this.gameState.phase = "reveal";
             await this.publishState(
-              `Three strikes from ${activeTeam.name} too! No one got it — let's reveal the remaining answers!`
+              `Three strikes from ${activeTeam.name} too! No one got it — let's reveal the remaining answers! ` +
+              `Official revealed answers: ${remainingAnswers.join(", ")}.`
             );
           } else {
             // First strike-out — pass control to other team
+            const previousActiveTeamName = activeTeam.name;
             this.switchActiveTeam();
             const newActiveTeam = this.activeTeam();
             const newActiveTeamName = newActiveTeam?.name || "the other team";
@@ -360,8 +365,9 @@ export class GameRoom implements DurableObject {
             this.gameState.roundControlPassed = true;
             this.gameState.phase = "guessing";
             await this.publishState(
-              `Three strikes! "${answer}" was not on the board. Control passes to ${newActiveTeamName}! ` +
-              `Host note: attempt to make a quick joke or pun about the team name "${newActiveTeamName}" before handing over control, e.g. "Now it's The Bulls turn to guess the top answers. Let's see if they can bring home the beef!".`
+              `Three strikes! "${answer}" was not on the board. Control switches from ${previousActiveTeamName} to ${newActiveTeamName}. ` +
+              `Host note: this handoff is FROM "${previousActiveTeamName}" TO "${newActiveTeamName}". ` +
+              `Attempt to make a quick joke or pun about the new team name "${newActiveTeamName}" before handing over control.`
             );
           }
         } else {
@@ -383,15 +389,19 @@ export class GameRoom implements DurableObject {
       this.sendTo(ws, { type: "error", message: "Only the active team can pass." });
       return;
     }
+    const previousActiveTeam = this.activeTeam();
+    const previousActiveTeamName = previousActiveTeam?.name || "The current team";
     this.switchActiveTeam();
     const newActiveTeam = this.activeTeam();
+    const newActiveTeamName = newActiveTeam?.name || "The other team";
     if (newActiveTeam) {
       // Reset the new team's strikes to 0 for their attempt
       newActiveTeam.strikes = 0;
     }
     this.gameState.phase = "guessing";
     await this.publishState(
-      `The team passed! ${newActiveTeam?.name || "The other team"}, can you answer: "${this.currentQuestion().prompt}"?`
+      `${previousActiveTeamName} passed. Control switches to ${newActiveTeamName}. ` +
+      `${newActiveTeamName}, can you answer: "${this.currentQuestion().prompt}"?`
     );
   }
 
@@ -784,10 +794,31 @@ export class GameRoom implements DurableObject {
     return `Next up: "${question}"`;
   }
 
+  private extractOfficialAnswersFromContext(context: string): string[] {
+    const match = context.match(/Official revealed answers:\s*([^]+?)\.?\s*(?:Host note:|$)/i);
+    if (!match?.[1]) return [];
+    return match[1]
+      .split(",")
+      .map((part) => part.trim())
+      .filter(Boolean);
+  }
+
+  private buildRevealAnswersFallback(answers: string[]): string {
+    if (answers.length === 0) {
+      return "No one got it — here's what was left on the board!";
+    }
+    return `No one got it — the remaining answers were: ${answers.join(", ")}.`;
+  }
+
   private async getAIHostMessage(context: string): Promise<string> {
     const startedAt = performance.now();
     const contextPreview = context.length > 500 ? `${context.slice(0, 500)}…` : context;
     const expectedQuestion = this.extractQuestionFromContext(context);
+    const officialAnswers = this.extractOfficialAnswersFromContext(context);
+    if (officialAnswers.length > 0) {
+      this.logTiming("ai.run.reveal_fallback", this.requestSequence, startedAt, `answers=${officialAnswers.length}`);
+      return this.buildRevealAnswersFallback(officialAnswers);
+    }
     try {
       const response = await this.env.AI.run("@cf/meta/llama-3.1-8b-instruct", {
         messages: [
@@ -797,6 +828,7 @@ export class GameRoom implements DurableObject {
               "You are the enthusiastic, witty host of a Family Feud-style game show called 'Survey Says'. " +
               "Keep responses SHORT (1-2 sentences), energetic, and fun. Stay in character at all times. " +
               "Never invent or alter facts, answers, or questions. If a question appears in context, use that exact question text. " +
+              "Never mention a next question unless the context explicitly says 'Next question'. " +
               "If context includes a host note asking for a pun/joke about a team name, include one quick, clean joke as instructed (handoff or winner announcement).",
           },
           { role: "user", content: context },
