@@ -832,7 +832,7 @@ export class GameRoom implements DurableObject {
               "Never invent or alter facts, answers, or questions. If a question appears in context, use that exact question text. " +
               "Never mention a next question unless the context explicitly says 'Next question'. " +
               "If context includes a host note asking for a pun/joke about a team name, include one quick, clean joke as instructed (handoff or winner announcement). " +
-              "If context includes a host note asking for an opening pun about both team names, craft a single short, energetic joke incorporating both teams at the start.",
+              "If context includes a host note asking for an opening pun about both team names, start with a short energetic joke about both teams, then transition to introducing the actual first question prompt (include the question text in quotes).",
           },
           { role: "user", content: context },
         ],
