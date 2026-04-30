@@ -179,6 +179,28 @@ input:focus { outline: none; border-color: #f5a623; }
 
 /* Controls */
 .controls { display: flex; flex-direction: column; align-items: center; gap: 0.75rem; }
+.pre-game-settings {
+  width: 100%;
+  max-width: 500px;
+  display: grid;
+  grid-template-columns: 140px 1fr;
+  gap: 0.75rem;
+  background: #111140;
+  border: 1px solid #2a2a5e;
+  border-radius: 8px;
+  padding: 0.85rem;
+}
+.pre-game-settings label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  font-size: 0.85rem;
+  color: #d9d9f3;
+}
+.pre-game-settings select,
+.pre-game-settings input {
+  width: 100%;
+}
 .buzz-btn { font-size: 1.5rem; padding: 1rem 3rem; background: #e74c3c; color: #fff; border-radius: 50px; }
 .buzz-btn:hover { background: #c0392b; }
 .guess-area { display: flex; gap: 0.75rem; width: 100%; max-width: 500px; }
@@ -226,8 +248,13 @@ input:focus { outline: none; border-color: #f5a623; }
   .player-status,
   .game-header,
   .scoreboard,
+  .pre-game-settings,
   .guess-area {
     flex-direction: column;
+  }
+
+  .pre-game-settings {
+    grid-template-columns: 1fr;
   }
 
   .answer-grid {

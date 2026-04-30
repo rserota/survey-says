@@ -63,6 +63,8 @@ export class GameRoom implements DurableObject {
       roomCode: "",
       phase: "lobby",
       teams: [],
+      roundsToPlay: 2,
+      questionTheme: null,
       currentQuestionIndex: 0,
       questions: [],
       activeTeamId: null,
@@ -81,6 +83,8 @@ export class GameRoom implements DurableObject {
             ...team,
             players: team.players ?? [],
           })),
+          roundsToPlay: savedState.roundsToPlay ?? 2,
+          questionTheme: savedState.questionTheme ?? null,
           lastRoundStarterTeamId: savedState.lastRoundStarterTeamId ?? null,
           roundControlPassed: savedState.roundControlPassed ?? false,
           hostTeamId: savedState.hostTeamId ?? null,
@@ -149,7 +153,9 @@ export class GameRoom implements DurableObject {
         await this.timeAction("ws.rejoin", requestId, () => this.handleRejoin(ws, msg.playerId));
         break;
       case "start_game":
-        await this.timeAction("ws.start_game", requestId, () => this.handleStartGame(ws, session));
+        await this.timeAction("ws.start_game", requestId, () =>
+          this.handleStartGame(ws, session, msg.roundsToPlay, msg.questionTheme)
+        );
         break;
       case "guess":
         await this.timeAction("ws.guess", requestId, () => this.handleGuess(ws, session, msg.answer));
@@ -261,7 +267,12 @@ export class GameRoom implements DurableObject {
     this.sendTo(ws, { type: "state_update", state: this.gameState });
   }
 
-  private async handleStartGame(ws: WebSocket, session: SessionAttachment | null): Promise<void> {
+  private async handleStartGame(
+    ws: WebSocket,
+    session: SessionAttachment | null,
+    requestedRoundsToPlay?: number,
+    requestedQuestionTheme?: string,
+  ): Promise<void> {
     if (!session) {
       this.sendTo(ws, { type: "error", message: "Join a team before starting the game." });
       return;
@@ -270,7 +281,14 @@ export class GameRoom implements DurableObject {
       this.sendTo(ws, { type: "error", message: "Only the host team can start the game." });
       return;
     }
-    await this.ensureQuestionsInitialized();
+
+    const roundsToPlay = Math.min(4, Math.max(1, Math.round(requestedRoundsToPlay ?? 2)));
+    const questionTheme = requestedQuestionTheme?.trim() ? requestedQuestionTheme.trim() : null;
+
+    this.gameState.roundsToPlay = roundsToPlay;
+    this.gameState.questionTheme = questionTheme;
+
+    await this.ensureQuestionsInitialized(roundsToPlay, questionTheme);
     if (this.gameState.questions.length < 1) {
       this.sendTo(ws, { type: "error", message: "Could not prepare questions. Try again." });
       return;
@@ -335,13 +353,15 @@ export class GameRoom implements DurableObject {
             // First strike-out — pass control to other team
             this.switchActiveTeam();
             const newActiveTeam = this.activeTeam();
+            const newActiveTeamName = newActiveTeam?.name || "the other team";
             if (newActiveTeam) {
               newActiveTeam.strikes = 0;
             }
             this.gameState.roundControlPassed = true;
             this.gameState.phase = "guessing";
             await this.publishState(
-              `Three strikes! "${answer}" was not on the board. Control passes to ${newActiveTeam?.name || "the other team"}!`
+              `Three strikes! "${answer}" was not on the board. Control passes to ${newActiveTeamName}! ` +
+              `Host note: attempt to make a quick joke or pun about the team name "${newActiveTeamName}" before handing over control, e.g. "Now it's The Bulls turn to guess the top answers. Let's see if they can bring home the beef!".`
             );
           }
         } else {
@@ -388,7 +408,10 @@ export class GameRoom implements DurableObject {
       this.gameState.phase = "gameover";
       const winner = [...this.gameState.teams].sort((a, b) => b.score - a.score)[0];
       await this.publishState(
-        `That's game! ${winner ? `${winner.name} wins with ${winner.score} points!` : "It's a tie!"} Thanks for playing Survey Says!`
+        winner
+          ? `That's game! ${winner.name} wins with ${winner.score} points! Thanks for playing Survey Says! ` +
+            `Host note: include one quick, clean joke or pun about the winning team name "${winner.name}" during the winner announcement.`
+          : "That's game! It's a tie! Thanks for playing Survey Says!"
       );
     } else {
       this.gameState.currentQuestionIndex += 1;
@@ -509,7 +532,7 @@ export class GameRoom implements DurableObject {
     );
   }
 
-  private async generateQuestionsFromAI(count: number): Promise<Question[] | null> {
+  private async generateQuestionsFromAI(count: number, theme: string | null): Promise<Question[] | null> {
     const startedAt = performance.now();
     const themePool = [
       "workplace",
@@ -534,7 +557,7 @@ export class GameRoom implements DurableObject {
       "exercise",
     ];
     const shuffledThemes = [...themePool].sort(() => Math.random() - 0.5);
-    const selectedThemes = shuffledThemes.slice(0, 6);
+    const selectedThemes = theme ? [theme] : shuffledThemes.slice(0, 6);
     const variationSeed = crypto.randomUUID().slice(0, 8);
 
     try {
@@ -556,7 +579,9 @@ export class GameRoom implements DurableObject {
               `Create exactly ${count} unique questions for one game round set. ` +
               "Points should be plausible survey-style values in descending popularity range. " +
               `Use this variation seed: ${variationSeed}. ` +
-              `Use these themes for variety: ${selectedThemes.join(", ")}. ` +
+              (theme
+                ? `Use this single theme for ALL questions: ${theme}. Every question and answer set must stay within this theme while still being distinct from each other. `
+                : `Use these themes for variety: ${selectedThemes.join(", ")}. `) +
               "Do not repeat common trope prompts. Make each question about a clearly different situation.",
           },
         ],
@@ -592,10 +617,10 @@ export class GameRoom implements DurableObject {
     }
   }
 
-  private async ensureQuestionsInitialized(): Promise<void> {
-    if (this.gameState.questions.length >= 4) return;
+  private async ensureQuestionsInitialized(roundsToPlay: number, theme: string | null): Promise<void> {
+    if (this.gameState.questions.length === roundsToPlay) return;
 
-    const generated = await this.generateQuestionsFromAI(4);
+    const generated = await this.generateQuestionsFromAI(roundsToPlay, theme);
     if (generated) {
       this.gameState.questions = generated;
       this.gameState.currentQuestionIndex = 0;
@@ -604,10 +629,12 @@ export class GameRoom implements DurableObject {
     }
 
     // Fallback so the game can still start if generation fails.
-    this.gameState.questions = FALLBACK_QUESTIONS.map((question) => ({
-      prompt: question.prompt,
-      answers: question.answers.map((answer) => ({ ...answer, revealed: false })),
-    }));
+    this.gameState.questions = FALLBACK_QUESTIONS
+      .slice(0, roundsToPlay)
+      .map((question) => ({
+        prompt: question.prompt,
+        answers: question.answers.map((answer) => ({ ...answer, revealed: false })),
+      }));
     this.gameState.currentQuestionIndex = 0;
     await this.saveState();
   }
@@ -769,7 +796,8 @@ export class GameRoom implements DurableObject {
             content:
               "You are the enthusiastic, witty host of a Family Feud-style game show called 'Survey Says'. " +
               "Keep responses SHORT (1-2 sentences), energetic, and fun. Stay in character at all times. " +
-              "Never invent or alter facts, answers, or questions. If a question appears in context, use that exact question text.",
+              "Never invent or alter facts, answers, or questions. If a question appears in context, use that exact question text. " +
+              "If context includes a host note asking for a pun/joke about a team name, include one quick, clean joke as instructed (handoff or winner announcement).",
           },
           { role: "user", content: context },
         ],

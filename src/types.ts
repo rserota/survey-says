@@ -35,6 +35,8 @@ export interface GameState {
   roomCode: string;
   phase: GamePhase;
   teams: Team[];
+  roundsToPlay?: number;
+  questionTheme?: string | null;
   currentQuestionIndex: number;
   questions: Question[];
   activeTeamId: string | null;
@@ -57,7 +59,7 @@ export interface PlayerSession {
 export type ClientMessage =
   | { type: "join"; teamName: string; playerName: string }
   | { type: "rejoin"; playerId: string }
-  | { type: "start_game" }
+  | { type: "start_game"; roundsToPlay?: number; questionTheme?: string }
   | { type: "guess"; answer: string }
   | { type: "pass" }           // pass control to other team
   | { type: "next_question" }; // host/admin advances

@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import type { GameState, PlayerSession } from "../types";
 
 interface Props {
@@ -14,9 +14,12 @@ export function GameBoard({ state, roomCode, send, session, error, onLeave }: Pr
   const [guess, setGuess] = useState("");
   const [copied, setCopied] = useState(false);
   const [loadingStart, setLoadingStart] = useState(false);
+  const [roundsToPlay, setRoundsToPlay] = useState(state.roundsToPlay ?? 2);
+  const [questionTheme, setQuestionTheme] = useState(state.questionTheme ?? "");
   const [guessPending, setGuessPending] = useState(false);
   const [waitingForHost, setWaitingForHost] = useState(false);
   const [ellipsisDots, setEllipsisDots] = useState("");
+  const guessInputRef = useRef<HTMLInputElement | null>(null);
   const question = state.questions[state.currentQuestionIndex];
   const isHost = session?.isHost ?? false;
   const isActiveTeam = !!session && state.activeTeamId === session.teamId;
@@ -44,8 +47,19 @@ export function GameBoard({ state, roomCode, send, session, error, onLeave }: Pr
 
   function handleStartGame() {
     setLoadingStart(true);
-    send({ type: "start_game" });
+    send({
+      type: "start_game",
+      roundsToPlay,
+      questionTheme: questionTheme.trim() || undefined,
+    });
   }
+
+  useEffect(() => {
+    if (state.phase === "lobby") {
+      setRoundsToPlay(state.roundsToPlay ?? 2);
+      setQuestionTheme(state.questionTheme ?? "");
+    }
+  }, [state.phase, state.roundsToPlay, state.questionTheme]);
 
   // Detect when AI is generating host message
   useEffect(() => {
@@ -78,6 +92,12 @@ export function GameBoard({ state, roomCode, send, session, error, onLeave }: Pr
       setGuessPending(false);
     }
   }, [error]);
+
+  useEffect(() => {
+    if (canGuess) {
+      guessInputRef.current?.focus();
+    }
+  }, [canGuess]);
 
   return (
     <div className="game-board">
@@ -155,22 +175,51 @@ export function GameBoard({ state, roomCode, send, session, error, onLeave }: Pr
       {/* Controls */}
       <div className="controls">
         {state.phase === "lobby" && (
-          <button disabled={!canStart || loadingStart} onClick={handleStartGame}>
-            {loadingStart ? (
-              <>
-                <span className="spinner"></span> Loading questions...
-              </>
-            ) : isHost ? (
-              "Start Game"
-            ) : (
-              "Waiting for host to start"
+          <>
+            {isHost && (
+              <div className="pre-game-settings">
+                <label>
+                  Rounds
+                  <select
+                    value={roundsToPlay}
+                    onChange={(e) => setRoundsToPlay(Number(e.target.value))}
+                    disabled={loadingStart}
+                  >
+                    {[1, 2, 3, 4].map((n) => (
+                      <option key={n} value={n}>{n}</option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  Theme (optional)
+                  <input
+                    value={questionTheme}
+                    onChange={(e) => setQuestionTheme(e.target.value)}
+                    placeholder="e.g. space, movies, sports"
+                    disabled={loadingStart}
+                    maxLength={50}
+                  />
+                </label>
+              </div>
             )}
-          </button>
+            <button disabled={!canStart || loadingStart} onClick={handleStartGame}>
+              {loadingStart ? (
+                <>
+                  <span className="spinner"></span> Loading questions...
+                </>
+              ) : isHost ? (
+                "Start Game"
+              ) : (
+                "Waiting for host to start"
+              )}
+            </button>
+          </>
         )}
 
         {state.phase === "guessing" && (
           <div className="guess-area">
             <input
+              ref={guessInputRef}
               placeholder="Your answer…"
               value={guess}
               onChange={(e) => setGuess(e.target.value)}
