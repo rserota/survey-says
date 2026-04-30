@@ -418,12 +418,14 @@ export class GameRoom implements DurableObject {
     }
     if (this.gameState.currentQuestionIndex + 1 >= this.gameState.questions.length) {
       this.gameState.phase = "gameover";
-      const winner = [...this.gameState.teams].sort((a, b) => b.score - a.score)[0];
+      const topScore = Math.max(...this.gameState.teams.map((team) => team.score));
+      const tiedTeams = this.gameState.teams.filter((team) => team.score === topScore);
+
       await this.publishState(
-        winner
-          ? `That's game! ${winner.name} wins with ${winner.score} points! Thanks for playing Survey Says! ` +
-            `Host note: include one quick, clean joke or pun about the winning team name "${winner.name}" during the winner announcement.`
-          : "That's game! It's a tie! Thanks for playing Survey Says!"
+        tiedTeams.length === 1
+          ? `That's game! ${tiedTeams[0].name} wins with ${tiedTeams[0].score} points! Thanks for playing Survey Says! ` +
+            `Host note: include one quick, clean joke or pun about the winning team name "${tiedTeams[0].name}" during the winner announcement.`
+          : `That's game! It's a tie at ${topScore} points between ${tiedTeams.map((team) => team.name).join(" and ")}! Thanks for playing Survey Says!`
       );
     } else {
       this.gameState.currentQuestionIndex += 1;
