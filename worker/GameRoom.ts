@@ -302,7 +302,9 @@ export class GameRoom implements DurableObject {
     this.gameState.roundControlPassed = false;
     const startingTeam = this.activeTeam();
     await this.publishState(
-      `The game is starting! Here's the first question: "${this.currentQuestion().prompt}". ${startingTeam?.name ?? "A team"} goes first.`
+      `The game is starting! Teams playing: ${this.gameState.teams.map((t) => t.name).join(" vs ")}. ` +
+      `Host note: Open with an enthusiastic welcome that includes a clever pun or joke incorporating both team names. ` +
+      `Then introduce the first question: "${this.currentQuestion().prompt}". ${startingTeam?.name ?? "A team"} goes first.`
     );
   }
 
@@ -829,7 +831,8 @@ export class GameRoom implements DurableObject {
               "Keep responses SHORT (1-2 sentences), energetic, and fun. Stay in character at all times. " +
               "Never invent or alter facts, answers, or questions. If a question appears in context, use that exact question text. " +
               "Never mention a next question unless the context explicitly says 'Next question'. " +
-              "If context includes a host note asking for a pun/joke about a team name, include one quick, clean joke as instructed (handoff or winner announcement).",
+              "If context includes a host note asking for a pun/joke about a team name, include one quick, clean joke as instructed (handoff or winner announcement). " +
+              "If context includes a host note asking for an opening pun about both team names, craft a single short, energetic joke incorporating both teams at the start.",
           },
           { role: "user", content: context },
         ],
